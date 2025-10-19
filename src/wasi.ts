@@ -1,5 +1,6 @@
 import * as wasi from "./wasi_defs.js";
 import { Fd } from "./fd.js";
+import { PreopenDirectory } from "./fs_mem.js";
 import { debug } from "./debug.js";
 
 export interface Options {
@@ -27,7 +28,6 @@ export default class WASI {
 
   /// Start a WASI command
   start(instance: {
-    // FIXME v0.3: close opened Fds after execution
     exports: { memory: WebAssembly.Memory; _start: () => unknown };
   }) {
     this.inst = instance;
@@ -39,6 +39,19 @@ export default class WASI {
         return e.code;
       } else {
         throw e;
+      }
+    } finally {
+      // Close all fds except stdin/stdout/stderr and the preopen
+      // directories. No need to call fd_close on individual fds, just
+      // reset the fds/freeFds array, and drop all the non-preopen fds
+      // that follow the preopen ones:
+      // https://github.com/WebAssembly/wasi-libc/blob/wasi-sdk-27/libc-bottom-half/sources/preopens.c#L244.
+      this.#freeFds = [];
+      for (let fd = 3; fd < this.fds.length; ++fd) {
+        if (!(this.fds[fd] instanceof PreopenDirectory)) {
+          this.fds.splice(fd, this.fds.length - fd);
+          break;
+        }
       }
     }
   }
