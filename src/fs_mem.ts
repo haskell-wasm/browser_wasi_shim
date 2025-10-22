@@ -366,6 +366,9 @@ export class OpenDirectory extends Fd {
       return wasi.ERRNO_PERM;
     }
 
+    if (inode instanceof Directory) {
+      inode.set_parent(parent_entry);
+    }
     parent_entry.contents.set(filename, inode);
 
     return wasi.ERRNO_SUCCESS;
@@ -597,9 +600,13 @@ export class Directory extends Inode {
 
     for (const entry of this.contents.values()) {
       if (entry instanceof Directory) {
-        entry.parent = this;
+        entry.set_parent(this);
       }
     }
+  }
+
+  set_parent(parent: Directory | null) {
+    this.parent = parent;
   }
 
   parent_ino(): bigint {
@@ -739,7 +746,9 @@ export class Directory extends Inode {
     if (!is_dir) {
       new_child = new File(new ArrayBuffer(0));
     } else {
-      new_child = new Directory(new Map());
+      const child_dir = new Directory(new Map());
+      child_dir.set_parent(parent_entry);
+      new_child = child_dir;
     }
     parent_entry.contents.set(filename, new_child);
     entry = new_child;
