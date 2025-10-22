@@ -366,6 +366,9 @@ export class OpenDirectory extends Fd {
       return wasi.ERRNO_PERM;
     }
 
+    if (inode instanceof Directory) {
+      inode.parent = parent_entry;
+    }
     parent_entry.contents.set(filename, inode);
 
     return wasi.ERRNO_SUCCESS;
@@ -585,7 +588,7 @@ class Path {
 
 export class Directory extends Inode {
   contents: Map<string, Inode>;
-  private parent: Directory | null = null;
+  parent: Directory | null = null;
 
   constructor(contents: Map<string, Inode> | [string, Inode][]) {
     super();
@@ -740,6 +743,7 @@ export class Directory extends Inode {
       new_child = new File(new ArrayBuffer(0));
     } else {
       new_child = new Directory(new Map());
+      new_child.parent = parent_entry;
     }
     parent_entry.contents.set(filename, new_child);
     entry = new_child;
