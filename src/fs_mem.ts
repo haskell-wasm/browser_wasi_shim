@@ -542,7 +542,7 @@ export class File extends Inode {
   }
 
   stat(): wasi.Filestat {
-    return new wasi.Filestat(this.ino, wasi.FILETYPE_REGULAR_FILE, this.size);
+    return this.build_filestat(wasi.FILETYPE_REGULAR_FILE, this.size);
   }
 }
 
@@ -622,7 +622,7 @@ export class Directory extends Inode {
   }
 
   stat(): wasi.Filestat {
-    return new wasi.Filestat(this.ino, wasi.FILETYPE_DIRECTORY, 0n);
+    return this.build_filestat(wasi.FILETYPE_DIRECTORY, 0n);
   }
 
   get_entry_for_path(path: Path): { ret: number; entry: Inode | null } {
@@ -724,12 +724,9 @@ export class Directory extends Inode {
       return { ret: path_ret, entry: null };
     }
 
-    let {
-      // eslint-disable-next-line prefer-const
+    const {
       ret: parent_ret,
-      // eslint-disable-next-line prefer-const
       parent_entry,
-      // eslint-disable-next-line prefer-const
       filename,
       entry,
     } = this.get_parent_dir_and_entry_for_path(path, true);
@@ -741,19 +738,17 @@ export class Directory extends Inode {
       return { ret: wasi.ERRNO_EXIST, entry: null };
     }
 
-    debug.log("create", path);
-    let new_child;
-    if (!is_dir) {
-      new_child = new File(new ArrayBuffer(0));
-    } else {
+    let new_child: Inode;
+    if (is_dir) {
       const child_dir = new Directory(new Map());
       child_dir.set_parent(parent_entry);
       new_child = child_dir;
+    } else {
+      new_child = new File(new ArrayBuffer(0));
     }
     parent_entry.contents.set(filename, new_child);
-    entry = new_child;
 
-    return { ret: wasi.ERRNO_SUCCESS, entry };
+    return { ret: wasi.ERRNO_SUCCESS, entry: new_child };
   }
 }
 

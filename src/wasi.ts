@@ -740,14 +740,17 @@ export default class WASI {
           );
           debug.log(path);
           const { ret, data } = self.fds[fd].path_readlink(path);
-          if (data != null) {
-            const data_buf = new TextEncoder().encode(data);
-            if (data_buf.length > buf_len) {
-              buffer.setUint32(nread_ptr, 0, true);
-              return wasi.ERRNO_BADF;
+          if (ret == wasi.ERRNO_SUCCESS) {
+            let bytes_written = 0;
+            if (data != null) {
+              const data_buf = new TextEncoder().encode(data);
+              bytes_written = Math.min(data_buf.length, buf_len);
+              buffer8.set(
+                data_buf.subarray(0, bytes_written),
+                buf_ptr,
+              );
             }
-            buffer8.set(data_buf, buf_ptr);
-            buffer.setUint32(nread_ptr, data_buf.length, true);
+            buffer.setUint32(nread_ptr, bytes_written, true);
           }
           return ret;
         } else {

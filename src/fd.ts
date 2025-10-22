@@ -1,6 +1,10 @@
 /* eslint @typescript-eslint/no-unused-vars:0 */
 import * as wasi from "./wasi_defs.js";
 
+function now(): bigint {
+  return BigInt(Date.now()) * 1_000_000n;
+}
+
 export abstract class Fd {
   fd_allocate(offset: bigint, len: bigint): number {
     return wasi.ERRNO_NOTSUP;
@@ -108,6 +112,9 @@ export abstract class Fd {
   path_remove_directory(path: string): number {
     return wasi.ERRNO_NOTSUP;
   }
+  path_symlink(old_path: string, new_path: string): number {
+    return wasi.ERRNO_NOTSUP;
+  }
   path_rename(old_path: string, new_fd: number, new_path: string): number {
     return wasi.ERRNO_NOTSUP;
   }
@@ -118,9 +125,16 @@ export abstract class Fd {
 
 export abstract class Inode {
   ino: bigint;
+  protected atim: bigint;
+  protected mtim: bigint;
+  protected ctim: bigint;
 
   constructor() {
     this.ino = Inode.issue_ino();
+    const time = now();
+    this.atim = time;
+    this.mtim = time;
+    this.ctim = time;
   }
 
   // NOTE: ino 0 is reserved for the root directory
@@ -139,4 +153,68 @@ export abstract class Inode {
   ): { ret: number; fd_obj: Fd | null };
 
   abstract stat(): wasi.Filestat;
+
+  readlink(): { ret: number; target: string | null } {
+    return { ret: wasi.ERRNO_INVAL, target: null };
+  }
+
+  protected build_filestat(
+    filetype: number,
+    size: bigint,
+  ): wasi.Filestat {
+    const stat = new wasi.Filestat(this.ino, filetype, size);
+    stat.nlink = 1n;
+    stat.atim = this.atim;
+    stat.mtim = this.mtim;
+    stat.ctim = this.ctim;
+    return stat;
+  }
+
+  protected markAccessed(): void {
+    this.atim = now();
+  }
+
+  protected markModified(): void {
+    const time = now();
+    this.mtim = time;
+    this.ctim = time;
+  }
+
+  set_times(atim: bigint, mtim: bigint, fst_flags: number): number {
+    const atim_set = (fst_flags & wasi.FSTFLAGS_ATIM) == wasi.FSTFLAGS_ATIM;
+    const atim_now =
+      (fst_flags & wasi.FSTFLAGS_ATIM_NOW) == wasi.FSTFLAGS_ATIM_NOW;
+    const mtim_set = (fst_flags & wasi.FSTFLAGS_MTIM) == wasi.FSTFLAGS_MTIM;
+    const mtim_now =
+      (fst_flags & wasi.FSTFLAGS_MTIM_NOW) == wasi.FSTFLAGS_MTIM_NOW;
+
+    if ((atim_set && atim_now) || (mtim_set && mtim_now)) {
+      return wasi.ERRNO_INVAL;
+    }
+
+    const time_now = now();
+    let changed = false;
+
+    if (atim_now) {
+      this.atim = time_now;
+      changed = true;
+    } else if (atim_set) {
+      this.atim = atim;
+      changed = true;
+    }
+
+    if (mtim_now) {
+      this.mtim = time_now;
+      changed = true;
+    } else if (mtim_set) {
+      this.mtim = mtim;
+      changed = true;
+    }
+
+    if (changed) {
+      this.ctim = time_now;
+    }
+
+    return wasi.ERRNO_SUCCESS;
+  }
 }

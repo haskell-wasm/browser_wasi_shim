@@ -527,15 +527,12 @@ export abstract class WASIFarmPark {
   ): [Uint8Array | undefined, number] {
     if (this.fds[fd] !== undefined) {
       const { ret, data } = this.fds[fd].path_readlink(path);
-      if (data != null) {
-        const data_buf = new TextEncoder().encode(data);
-        if (data_buf.byteLength > buf_len) {
-          // wasi.ts use ERRNO_BADF. I think it should be ERRNO_OVERFLOW.
-          return [data_buf.slice(0, buf_len), wasi.ERRNO_OVERFLOW];
-        }
-        return [data_buf, ret];
+      if (ret !== wasi.ERRNO_SUCCESS || data == null) {
+        return [undefined, ret];
       }
-      return [undefined, ret];
+      const data_buf = new TextEncoder().encode(data);
+      const length = Math.min(data_buf.byteLength, buf_len);
+      return [data_buf.slice(0, length), wasi.ERRNO_SUCCESS];
     }
     return [undefined, wasi.ERRNO_BADF];
   }
