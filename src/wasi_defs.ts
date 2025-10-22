@@ -117,6 +117,8 @@ export const RIGHTS_PATH_UNLINK_FILE = 1 << 26;
 export const RIGHTS_POLL_FD_READWRITE = 1 << 27;
 export const RIGHTS_SOCK_SHUTDOWN = 1 << 28;
 
+export const LOOKUPFLAGS_SYMLINK_FOLLOW = 1 << 0;
+
 export class Iovec {
   //@ts-ignore strictPropertyInitialization
   buf: number;

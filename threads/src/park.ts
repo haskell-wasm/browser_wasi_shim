@@ -571,12 +571,12 @@ export abstract class WASIFarmPark {
   }
 
   protected path_symlink(
-    _old_path: string,
+    old_path: string,
     fd: number,
-    _new_path: string,
+    new_path: string,
   ): number {
     if (this.fds[fd] !== undefined) {
-      return wasi.ERRNO_NOTSUP;
+      return this.fds[fd].path_symlink(old_path, new_path);
     }
     return wasi.ERRNO_BADF;
   }

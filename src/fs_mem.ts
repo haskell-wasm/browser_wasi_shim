@@ -1,6 +1,7 @@
 import { debug } from "./debug.js";
 import * as wasi from "./wasi_defs.js";
 import { Fd, Inode } from "./fd.js";
+import { Symlink, SYMLOOP_MAX } from "./symlink.js";
 
 function dataResize(data: Uint8Array, newDataSize: number): Uint8Array {
   // reuse same data if not actually resizing
@@ -172,7 +173,39 @@ export class OpenDirectory extends Fd {
   }
 
   fd_fdstat_get(): { ret: number; fdstat: wasi.Fdstat | null } {
-    return { ret: 0, fdstat: new wasi.Fdstat(wasi.FILETYPE_DIRECTORY, 0) };
+    const fdstat = new wasi.Fdstat(wasi.FILETYPE_DIRECTORY, 0);
+    const base_rights =
+      wasi.RIGHTS_FD_READDIR |
+      wasi.RIGHTS_FD_FILESTAT_GET |
+      wasi.RIGHTS_PATH_CREATE_DIRECTORY |
+      wasi.RIGHTS_PATH_CREATE_FILE |
+      wasi.RIGHTS_PATH_LINK_SOURCE |
+      wasi.RIGHTS_PATH_LINK_TARGET |
+      wasi.RIGHTS_PATH_OPEN |
+      wasi.RIGHTS_PATH_READLINK |
+      wasi.RIGHTS_PATH_RENAME_SOURCE |
+      wasi.RIGHTS_PATH_RENAME_TARGET |
+      wasi.RIGHTS_PATH_FILESTAT_GET |
+      wasi.RIGHTS_PATH_SYMLINK |
+      wasi.RIGHTS_PATH_REMOVE_DIRECTORY |
+      wasi.RIGHTS_PATH_UNLINK_FILE;
+    fdstat.fs_rights_base = BigInt(base_rights);
+    const inheriting_rights =
+      wasi.RIGHTS_FD_DATASYNC |
+      wasi.RIGHTS_FD_READ |
+      wasi.RIGHTS_FD_SEEK |
+      wasi.RIGHTS_FD_TELL |
+      wasi.RIGHTS_FD_WRITE |
+      wasi.RIGHTS_FD_FILESTAT_GET |
+      wasi.RIGHTS_FD_FILESTAT_SET_SIZE |
+      wasi.RIGHTS_FD_FILESTAT_SET_TIMES |
+      wasi.RIGHTS_FD_SYNC |
+      wasi.RIGHTS_FD_ADVISE |
+      wasi.RIGHTS_FD_ALLOCATE |
+      wasi.RIGHTS_PATH_FILESTAT_GET |
+      wasi.RIGHTS_PATH_READLINK;
+    fdstat.fs_rights_inherited = BigInt(inheriting_rights);
+    return { ret: 0, fdstat };
   }
 
   fd_readdir_single(cookie: bigint): {
@@ -229,12 +262,41 @@ export class OpenDirectory extends Fd {
       return { ret: path_err, filestat: null };
     }
 
-    const { ret, entry } = this.dir.get_entry_for_path(path);
+    const follow =
+      (flags & wasi.LOOKUPFLAGS_SYMLINK_FOLLOW) ==
+      wasi.LOOKUPFLAGS_SYMLINK_FOLLOW;
+
+    const { ret, entry } = this.dir.get_entry_for_path(path, follow);
     if (entry == null) {
       return { ret, filestat: null };
     }
 
-    return { ret: 0, filestat: entry.stat() };
+    return { ret: wasi.ERRNO_SUCCESS, filestat: entry.stat() };
+  }
+
+  path_filestat_set_times(
+    flags: number,
+    path_str: string,
+    atim: bigint,
+    mtim: bigint,
+    fst_flags: number,
+  ): number {
+    const { ret: path_err, path } = Path.from(path_str);
+    if (path == null) {
+      return path_err;
+    }
+
+    const follow =
+      path.is_dir ||
+      (flags & wasi.LOOKUPFLAGS_SYMLINK_FOLLOW) ==
+        wasi.LOOKUPFLAGS_SYMLINK_FOLLOW;
+
+    const { ret, entry } = this.dir.get_entry_for_path(path, follow);
+    if (entry == null) {
+      return ret;
+    }
+
+    return entry.set_times(atim, mtim, fst_flags);
   }
 
   path_lookup(
@@ -242,12 +304,18 @@ export class OpenDirectory extends Fd {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     dirflags: number,
   ): { ret: number; inode_obj: Inode | null } {
+    if (
+      (dirflags & wasi.LOOKUPFLAGS_SYMLINK_FOLLOW) ==
+      wasi.LOOKUPFLAGS_SYMLINK_FOLLOW
+    ) {
+      return { ret: wasi.ERRNO_INVAL, inode_obj: null };
+    }
     const { ret: path_ret, path } = Path.from(path_str);
     if (path == null) {
       return { ret: path_ret, inode_obj: null };
     }
 
-    const { ret, entry } = this.dir.get_entry_for_path(path);
+    const { ret, entry } = this.dir.get_entry_for_path(path, false);
     if (entry == null) {
       return { ret, inode_obj: null };
     }
@@ -270,8 +338,13 @@ export class OpenDirectory extends Fd {
       return { ret: path_ret, fd_obj: null };
     }
 
+    const followFinal =
+      path.is_dir ||
+      ((dirflags & wasi.LOOKUPFLAGS_SYMLINK_FOLLOW) ==
+        wasi.LOOKUPFLAGS_SYMLINK_FOLLOW);
+
     // eslint-disable-next-line prefer-const
-    let { ret, entry } = this.dir.get_entry_for_path(path);
+    let { ret, entry } = this.dir.get_entry_for_path(path, followFinal);
     if (entry == null) {
       if (ret != wasi.ERRNO_NOENT) {
         return { ret, fd_obj: null };
@@ -294,6 +367,11 @@ export class OpenDirectory extends Fd {
       // was supposed to be created exclusively, but exists already
       return { ret: wasi.ERRNO_EXIST, fd_obj: null };
     }
+
+    if (entry instanceof Symlink) {
+      return { ret: wasi.ERRNO_LOOP, fd_obj: null };
+    }
+
     if (
       (oflags & wasi.OFLAGS_DIRECTORY) == wasi.OFLAGS_DIRECTORY &&
       entry.stat().filetype !== wasi.FILETYPE_DIRECTORY
@@ -374,6 +452,24 @@ export class OpenDirectory extends Fd {
     return wasi.ERRNO_SUCCESS;
   }
 
+  path_readlink(path_str: string): { ret: number; data: string | null } {
+    const { ret: path_ret, path } = Path.from(path_str);
+    if (path == null) {
+      return { ret: path_ret, data: null };
+    }
+
+    const { ret, entry } = this.dir.get_entry_for_path(path, false);
+    if (entry == null) {
+      return { ret, data: null };
+    }
+
+    if (!(entry instanceof Symlink)) {
+      return { ret: wasi.ERRNO_INVAL, data: null };
+    }
+
+    return { ret: wasi.ERRNO_SUCCESS, data: entry.target };
+  }
+
   path_unlink(path_str: string): { ret: number; inode_obj: Inode | null } {
     const { ret: path_ret, path } = Path.from(path_str);
     if (path == null) {
@@ -404,6 +500,7 @@ export class OpenDirectory extends Fd {
     if (path == null) {
       return path_ret;
     }
+    const expect_dir = path.is_dir;
 
     const {
       ret: parent_ret,
@@ -416,6 +513,9 @@ export class OpenDirectory extends Fd {
     }
     if (entry.stat().filetype === wasi.FILETYPE_DIRECTORY) {
       return wasi.ERRNO_ISDIR;
+    }
+    if (expect_dir) {
+      return wasi.ERRNO_NOTDIR;
     }
     parent_entry.contents.delete(filename);
     return wasi.ERRNO_SUCCESS;
@@ -448,6 +548,17 @@ export class OpenDirectory extends Fd {
     }
     if (!parent_entry.contents.delete(filename)) {
       return wasi.ERRNO_NOENT;
+    }
+    return wasi.ERRNO_SUCCESS;
+  }
+
+  path_symlink(old_path: string, new_path: string): number {
+    const { ret, entry } = this.dir.create_symlink_for_path(
+      new_path,
+      old_path,
+    );
+    if (entry == null) {
+      return ret;
     }
     return wasi.ERRNO_SUCCESS;
   }
@@ -625,28 +736,120 @@ export class Directory extends Inode {
     return this.build_filestat(wasi.FILETYPE_DIRECTORY, 0n);
   }
 
-  get_entry_for_path(path: Path): { ret: number; entry: Inode | null } {
-    let entry: Inode = this;
-    for (const component of path.parts) {
-      if (!(entry instanceof Directory)) {
+  private resolve_path(
+    path: Path,
+    followFinal: boolean,
+  ): { ret: number; entry: Inode | null } {
+    return this.resolve_path_from(
+      this,
+      path.parts,
+      path.is_dir,
+      followFinal,
+      0,
+    );
+  }
+
+  private resolve_path_from(
+    current: Directory,
+    parts: string[],
+    isDir: boolean,
+    followFinal: boolean,
+    depth: number,
+  ): { ret: number; entry: Inode | null } {
+    if (parts.length === 0) {
+      if (isDir && current.stat().filetype !== wasi.FILETYPE_DIRECTORY) {
         return { ret: wasi.ERRNO_NOTDIR, entry: null };
       }
-      const child = entry.contents.get(component);
-      if (child !== undefined) {
-        entry = child;
-      } else {
-        debug.log(component);
-        return { ret: wasi.ERRNO_NOENT, entry: null };
-      }
+      return { ret: wasi.ERRNO_SUCCESS, entry: current };
     }
 
-    if (path.is_dir) {
-      if (entry.stat().filetype != wasi.FILETYPE_DIRECTORY) {
+    const [component, ...rest] = parts;
+    const child = current.contents.get(component);
+    if (child === undefined) {
+      debug.log(component);
+      return { ret: wasi.ERRNO_NOENT, entry: null };
+    }
+
+    const hasRest = rest.length > 0;
+    const restStr = Directory.partsToPathString(rest, isDir);
+
+    if (child instanceof Symlink) {
+      const shouldFollow = hasRest ? true : followFinal || isDir;
+      if (!shouldFollow) {
+        if (hasRest || isDir) {
+          return { ret: wasi.ERRNO_NOTDIR, entry: null };
+        }
+        return { ret: wasi.ERRNO_SUCCESS, entry: child };
+      }
+
+      if (depth >= SYMLOOP_MAX) {
+        return { ret: wasi.ERRNO_LOOP, entry: null };
+      }
+
+      let targetPath = child.target;
+      if (restStr.length > 0) {
+        targetPath = Directory.joinPaths(targetPath, restStr);
+      } else if (isDir && !targetPath.endsWith("/")) {
+        targetPath += "/";
+      }
+
+      const { ret: targetRet, path: targetResolved } = Path.from(targetPath);
+      if (targetResolved == null) {
+        return { ret: targetRet, entry: null };
+      }
+
+      return this.resolve_path_from(
+        current,
+        targetResolved.parts,
+        targetResolved.is_dir,
+        followFinal,
+        depth + 1,
+      );
+    }
+
+    if (!hasRest) {
+      if (isDir && child.stat().filetype !== wasi.FILETYPE_DIRECTORY) {
         return { ret: wasi.ERRNO_NOTDIR, entry: null };
       }
+      return { ret: wasi.ERRNO_SUCCESS, entry: child };
     }
 
-    return { ret: wasi.ERRNO_SUCCESS, entry };
+    if (!(child instanceof Directory)) {
+      return { ret: wasi.ERRNO_NOTDIR, entry: null };
+    }
+
+    return this.resolve_path_from(child, rest, isDir, followFinal, depth);
+  }
+
+  private static partsToPathString(parts: string[], isDir: boolean): string {
+    if (parts.length === 0) {
+      return "";
+    }
+    let s = parts.join("/");
+    if (isDir) {
+      s += "/";
+    }
+    return s;
+  }
+
+  private static joinPaths(base: string, addition: string): string {
+    if (base.length === 0) {
+      return addition;
+    }
+    if (addition.length === 0) {
+      return base;
+    }
+    if (base.endsWith("/")) {
+      return base + addition;
+    }
+    return `${base}/${addition}`;
+  }
+
+  get_entry_for_path(
+    path: Path,
+    followFinal: boolean = true,
+  ): { ret: number; entry: Inode | null } {
+    return this.resolve_path(path, followFinal);
   }
 
   get_parent_dir_and_entry_for_path(
@@ -669,11 +872,16 @@ export class Directory extends Inode {
       };
     }
 
-    const { ret: entry_ret, entry: parent_entry } =
-      this.get_entry_for_path(path);
+    const { ret: parent_ret, entry: parent_entry } = this.resolve_path_from(
+      this,
+      path.parts,
+      true,
+      true,
+      0,
+    );
     if (parent_entry == null) {
       return {
-        ret: entry_ret,
+        ret: parent_ret,
         parent_entry: null,
         filename: null,
         entry: null,
@@ -687,7 +895,7 @@ export class Directory extends Inode {
         entry: null,
       };
     }
-    const entry: Inode | undefined | null = parent_entry.contents.get(filename);
+    const entry = parent_entry.contents.get(filename);
     if (entry === undefined) {
       if (!allow_undefined) {
         return {
@@ -696,20 +904,13 @@ export class Directory extends Inode {
           filename: null,
           entry: null,
         };
-      } else {
-        return { ret: wasi.ERRNO_SUCCESS, parent_entry, filename, entry: null };
       }
-    }
-
-    if (path.is_dir) {
-      if (entry.stat().filetype != wasi.FILETYPE_DIRECTORY) {
-        return {
-          ret: wasi.ERRNO_NOTDIR,
-          parent_entry: null,
-          filename: null,
-          entry: null,
-        };
-      }
+      return {
+        ret: wasi.ERRNO_SUCCESS,
+        parent_entry,
+        filename,
+        entry: null,
+      };
     }
 
     return { ret: wasi.ERRNO_SUCCESS, parent_entry, filename, entry };
@@ -749,6 +950,48 @@ export class Directory extends Inode {
     parent_entry.contents.set(filename, new_child);
 
     return { ret: wasi.ERRNO_SUCCESS, entry: new_child };
+  }
+
+  create_symlink_for_path(
+    path_str: string,
+    target: string,
+  ): { ret: number; entry: Inode | null } {
+    if (target.includes("\0") || target.startsWith("/")) {
+      return { ret: wasi.ERRNO_INVAL, entry: null };
+    }
+
+    const { ret: path_ret, path } = Path.from(path_str);
+    if (path == null) {
+      return { ret: path_ret, entry: null };
+    }
+
+    const {
+      ret: parent_ret,
+      parent_entry,
+      filename,
+      entry,
+    } = this.get_parent_dir_and_entry_for_path(path, true);
+    if (parent_entry == null || filename == null) {
+      return { ret: parent_ret, entry: null };
+    }
+
+    if (path.is_dir) {
+      if (entry == null) {
+        return { ret: wasi.ERRNO_NOENT, entry: null };
+      }
+      if (entry.stat().filetype === wasi.FILETYPE_DIRECTORY) {
+        return { ret: wasi.ERRNO_EXIST, entry: null };
+      }
+      return { ret: wasi.ERRNO_NOTDIR, entry: null };
+    }
+
+    if (entry != null) {
+      return { ret: wasi.ERRNO_EXIST, entry: null };
+    }
+
+    const symlink = new Symlink(target);
+    parent_entry.contents.set(filename, symlink);
+    return { ret: wasi.ERRNO_SUCCESS, entry: symlink };
   }
 }
 

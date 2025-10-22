@@ -10,6 +10,7 @@ export {
   PreopenDirectory,
   ConsoleStdout,
 } from "./fs_mem.js";
+export { Symlink, SYMLOOP_MAX } from "./symlink.js";
 export { SyncOPFSFile, OpenSyncOPFSFile } from "./fs_opfs.js";
 export { strace } from "./strace.js";
 export * as wasi from "./wasi_defs.js";
