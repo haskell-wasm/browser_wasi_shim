@@ -8,7 +8,6 @@
   },
   "WASI Rust tests [wasm32-wasip1]": {
     "path_exists": "fail",
-    "fd_filestat_set": "fail",
     "symlink_create": "fail",
     "path_open_read_write": "fail",
     "path_rename_dir_trailing_slashes": "fail",
