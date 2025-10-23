@@ -105,6 +105,9 @@ export abstract class Fd {
   path_readlink(path: string): { ret: number; data: string | null } {
     return { ret: wasi.ERRNO_NOTSUP, data: null };
   }
+  path_symlink(old_path: string, new_path: string): number {
+    return wasi.ERRNO_NOTSUP;
+  }
   path_remove_directory(path: string): number {
     return wasi.ERRNO_NOTSUP;
   }

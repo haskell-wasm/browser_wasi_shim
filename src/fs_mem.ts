@@ -415,6 +415,34 @@ export class OpenDirectory extends Fd {
     return wasi.ERRNO_SUCCESS;
   }
 
+  path_symlink(old_path_str: string, new_path_str: string): number {
+    const { ret: new_ret, path: new_path } = Path.from(new_path_str);
+    if (new_path == null) {
+      return new_ret;
+    }
+
+    const {
+      ret: parent_ret,
+      parent_entry,
+      filename,
+    } = this.dir.get_parent_dir_and_entry_for_path(new_path, true);
+    if (parent_entry == null || filename == null) {
+      return parent_ret;
+    }
+
+    const { ret: old_ret, path: old_path } = Path.from(old_path_str);
+    if (old_path == null) {
+      return old_ret;
+    }
+
+    const { ret: entry_ret, entry } = parent_entry.get_entry_for_path(old_path);
+    if (entry == null) {
+      return entry_ret;
+    }
+
+    return this.path_link(new_path_str, entry, true);
+  }
+
   path_unlink(path_str: string): { ret: number; inode_obj: InodeMem | null } {
     const { ret: path_ret, path } = Path.from(path_str);
     if (path == null) {

@@ -813,15 +813,13 @@ export default class WASI {
       ): number {
         const buffer8 = new Uint8Array(self.inst.exports.memory.buffer);
         if (self.fds[fd] != undefined) {
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           const old_path = new TextDecoder("utf-8").decode(
             buffer8.slice(old_path_ptr, old_path_ptr + old_path_len),
           );
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           const new_path = new TextDecoder("utf-8").decode(
             buffer8.slice(new_path_ptr, new_path_ptr + new_path_len),
           );
-          return wasi.ERRNO_NOTSUP;
+          return self.fds[fd].path_symlink(old_path, new_path);
         } else {
           return wasi.ERRNO_BADF;
         }
