@@ -33,7 +33,7 @@
   "homepage": "https://github.com/bjorn3/browser_wasi_shim#readme",
   "devDependencies": {
     "@swc/cli": "^0.7.8",
-    "@swc/core": "^1.13.5",
+    "@swc/core": "^1.13.21",
     "@typescript-eslint/eslint-plugin": "^8.46.2",
     "@typescript-eslint/parser": "^8.46.2",
     "eslint": "^9.38.0",
