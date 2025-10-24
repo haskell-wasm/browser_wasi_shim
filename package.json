@@ -32,13 +32,13 @@
   "typings": "./typings/index.d.ts",
   "homepage": "https://github.com/bjorn3/browser_wasi_shim#readme",
   "devDependencies": {
-    "@swc/cli": "^0.7.8",
-    "@swc/core": "^1.13.5",
-    "@typescript-eslint/eslint-plugin": "^8.46.2",
-    "@typescript-eslint/parser": "^8.46.2",
-    "eslint": "^9.38.0",
-    "playwright": "^1.56.1",
-    "prettier": "^3.6.2",
+    "@swc/cli": "^0.7.9",
+    "@swc/core": "^1.15.7",
+    "@typescript-eslint/eslint-plugin": "^8.50.0",
+    "@typescript-eslint/parser": "^8.50.0",
+    "eslint": "^9.39.2",
+    "playwright": "^1.57.0",
+    "prettier": "^3.7.4",
     "typescript": "^5.9.3"
   }
 }
