@@ -95,7 +95,7 @@ async function configureRoutes(context, harnessURL) {
 }
 
 async function runWASIOnBrowser(options) {
-  const browser = await chromium.launch({channel: "chromium"});
+  const browser = await chromium.launch({ channel: "chrome" });
   const context = await browser.newContext();
   const harnessURL = 'http://browser-wasi-shim.localhost'
 
