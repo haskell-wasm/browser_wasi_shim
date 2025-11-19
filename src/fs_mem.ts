@@ -411,6 +411,7 @@ export class OpenDirectory extends Fd {
       inode.parent = parent_entry;
     }
     parent_entry.contents.set(filename, inode);
+    parent_entry.resolvePendingLinkTarget(filename, inode);
 
     return wasi.ERRNO_SUCCESS;
   }
@@ -423,10 +424,10 @@ export class OpenDirectory extends Fd {
 
     const {
       ret: parent_ret,
-      parent_entry,
-      filename,
+      parent_entry: link_parent,
+      filename: link_filename,
     } = this.dir.get_parent_dir_and_entry_for_path(new_path, true);
-    if (parent_entry == null || filename == null) {
+    if (link_parent == null || link_filename == null) {
       return parent_ret;
     }
 
@@ -435,12 +436,32 @@ export class OpenDirectory extends Fd {
       return old_ret;
     }
 
-    const { ret: entry_ret, entry } = parent_entry.get_entry_for_path(old_path);
-    if (entry == null) {
-      return entry_ret;
+    const {
+      ret: target_parent_ret,
+      parent_entry: target_parent,
+      filename: target_filename,
+      entry: target_entry,
+    } = link_parent.get_parent_dir_and_entry_for_path(old_path, true);
+    if (target_parent == null || target_filename == null) {
+      return target_parent_ret;
     }
 
-    return this.path_link(new_path_str, entry, true);
+    if (target_entry != null) {
+      return this.path_link(new_path_str, target_entry, true);
+    }
+
+    const placeholder = new PendingSymlink(
+      link_parent,
+      link_filename,
+      target_parent,
+      target_filename,
+    );
+    const link_ret = this.path_link(new_path_str, placeholder, true);
+    if (link_ret != wasi.ERRNO_SUCCESS) {
+      return link_ret;
+    }
+    target_parent.registerPendingLinkTarget(target_filename, placeholder);
+    return wasi.ERRNO_SUCCESS;
   }
 
   path_unlink(path_str: string): { ret: number; inode_obj: InodeMem | null } {
@@ -463,6 +484,7 @@ export class OpenDirectory extends Fd {
       return { ret: wasi.ERRNO_NOENT, inode_obj: null };
     }
 
+    detachPendingSymlink(entry);
     parent_entry.contents.delete(filename);
 
     return { ret: wasi.ERRNO_SUCCESS, inode_obj: entry };
@@ -486,6 +508,7 @@ export class OpenDirectory extends Fd {
     if (entry.stat().filetype === wasi.FILETYPE_DIRECTORY) {
       return wasi.ERRNO_ISDIR;
     }
+    detachPendingSymlink(entry);
     parent_entry.contents.delete(filename);
     return wasi.ERRNO_SUCCESS;
   }
@@ -713,6 +736,7 @@ class Path {
 export class Directory extends InodeMem {
   contents: Map<string, InodeMem>;
   parent: Directory | null = null;
+  private pendingSymlinkTargets?: Map<string, PendingSymlink[]>;
 
   constructor(contents: Map<string, InodeMem> | [string, InodeMem][]) {
     super();
@@ -879,8 +903,111 @@ export class Directory extends InodeMem {
     }
     parent_entry.contents.set(filename, new_child);
     entry = new_child;
+    parent_entry.resolvePendingLinkTarget(filename, entry);
 
     return { ret: wasi.ERRNO_SUCCESS, entry };
+  }
+
+  registerPendingLinkTarget(name: string, pending: PendingSymlink): void {
+    if (this.pendingSymlinkTargets == undefined) {
+      this.pendingSymlinkTargets = new Map();
+    }
+    const pendingList = this.pendingSymlinkTargets.get(name);
+    if (pendingList == undefined) {
+      this.pendingSymlinkTargets.set(name, [pending]);
+    } else {
+      pendingList.push(pending);
+    }
+  }
+
+  removePendingLinkTarget(name: string, pending: PendingSymlink): void {
+    const pendingList = this.pendingSymlinkTargets?.get(name);
+    if (pendingList == undefined) {
+      return;
+    }
+    const idx = pendingList.indexOf(pending);
+    if (idx != -1) {
+      pendingList.splice(idx, 1);
+    }
+    if (pendingList.length == 0) {
+      this.pendingSymlinkTargets?.delete(name);
+    }
+  }
+
+  resolvePendingLinkTarget(name: string, entry: InodeMem): void {
+    const pendingList = this.pendingSymlinkTargets?.get(name);
+    if (pendingList == undefined) {
+      return;
+    }
+    this.pendingSymlinkTargets?.delete(name);
+    for (const pending of pendingList) {
+      pending.resolve(entry);
+    }
+  }
+}
+
+class PendingSymlink extends InodeMem {
+  private readonly parent: Directory;
+  private readonly filename: string;
+  private targetDir: Directory | null;
+  private targetName: string | null;
+
+  constructor(
+    parent: Directory,
+    filename: string,
+    targetDir: Directory,
+    targetName: string,
+  ) {
+    super();
+    this.parent = parent;
+    this.filename = filename;
+    this.targetDir = targetDir;
+    this.targetName = targetName;
+  }
+
+  resolve(target: InodeMem): void {
+    if (this.parent.contents.get(this.filename) !== this) {
+      this.detach();
+      return;
+    }
+    if (target instanceof Directory) {
+      target.parent = this.parent;
+    }
+    this.parent.contents.set(this.filename, target);
+    this.detach();
+  }
+
+  path_open(
+    _oflags: number,
+    _fs_rights_base: bigint,
+    _fd_flags: number,
+  ): { ret: number; fd_obj: Fd | null } {
+    return { ret: wasi.ERRNO_NOENT, fd_obj: null };
+  }
+
+  stat(): wasi.Filestat {
+    return new wasi.Filestat(
+      this.ino,
+      wasi.FILETYPE_SYMBOLIC_LINK,
+      0n,
+      this.atim,
+      this.mtim,
+      this.ctim,
+    );
+  }
+
+  detach(): void {
+    if (this.targetDir != null && this.targetName != null) {
+      this.targetDir.removePendingLinkTarget(this.targetName, this);
+      this.targetDir = null;
+      this.targetName = null;
+    }
+  }
+}
+
+function detachPendingSymlink(entry: InodeMem): void {
+  if (entry instanceof PendingSymlink) {
+    entry.detach();
   }
 }
 
