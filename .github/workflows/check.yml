@@ -5,6 +5,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -17,3 +20,26 @@ jobs:
       - run: npm run check
       - run: python3 -m pip install -r ./test/wasi-testsuite/test-runner/requirements.txt
       - run: npm test
+
+      - name: test-playground
+        run: |
+          curl -L https://github.com/haskell-wasm/ghc-in-browser/archive/refs/heads/gh-pages.tar.gz | tar xz --strip-components=1
+
+          sed -i -e "s|https://esm.sh/gh/haskell-wasm/browser_wasi_shim|./dist/index.js|" index.html
+          curl -L https://gitlab.haskell.org/haskell-wasm/ghc/-/raw/ghc-9.14/.gitlab/hello.hs -O
+          curl -L https://gitlab.haskell.org/haskell-wasm/ghc/-/raw/ghc-9.14/testsuite/tests/ghc-api-browser/playground001.js -o test.cjs
+          sed -i -e 's|".mjs": "application/javascript",|".mjs": "application/javascript", ".js": "application/javascript"|' test.cjs
+
+          npm install puppeteer-core
+          chmod +x test.cjs
+          ./test.cjs '{"browser":"chrome","executablePath":"/usr/bin/google-chrome-stable","args":["--no-sandbox"]}' | grep -F 'main = putStrLn "hello world"'
+
+      - name: upload-pages-artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+          retention-days: 90
+
+      - name: deploy-pages
+        uses: actions/deploy-pages@v4
+        if: github.event_name == 'push' && github.ref_name == 'master'
